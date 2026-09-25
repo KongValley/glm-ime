@@ -266,7 +266,7 @@ void TextService::setCompositionString(EditSession* session, const wchar_t* str,
         // get current selection/insertion point
         if(context->GetSelection(editCookie, TF_DEFAULT_SELECTION, 1, &selection, &selectionNum) == S_OK) {
             ComPtr<ITfRange> compositionRange;
-            if(composition_->GetRange(&compositionRange) == S_OK) {
+            if(composition_ && composition_->GetRange(&compositionRange) == S_OK) {
                 bool selPosInComposition = true;
                 // if current insertion point is not covered by composition, we cannot insert text here.
                 if(selPosInComposition) {

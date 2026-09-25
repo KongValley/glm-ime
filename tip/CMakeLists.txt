@@ -42,6 +42,7 @@ endif()
 target_sources(glm-ime-tip PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/tip_exports.def")
 target_link_libraries(glm-ime-tip PRIVATE libIME2_static)
 target_compile_options(glm-ime-tip PRIVATE /utf-8)
+    target_link_options(glm-ime-tip PRIVATE "/MAP:${CMAKE_CURRENT_BINARY_DIR}/Release/glm-ime-tip.map" "/MAPINFO:EXPORTS")
 target_compile_definitions(glm-ime-tip PRIVATE
     _UNICODE UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
 )

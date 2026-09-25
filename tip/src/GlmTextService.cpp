@@ -254,10 +254,11 @@ void GlmTextService::applyActions(EditSession* session, const EngineActions& act
             if (composing_)
                 setCompositionString(session, act.text.c_str(), (int)act.text.size());
             if (composing_ && act.text.empty()) {
-                // 空串 = 结束组词
+                // 空串 = 结束组词（内部已把光标移到定稿文本尾）
                 endCompositionInSession(session, L"", 0);
             }
-            setCompositionCursor(session, act.cursor);
+            if (composing_)   // 组词已结束时 composition_ 为空，跳过光标设置
+                setCompositionCursor(session, act.cursor);
             break;
         }
         case EngineActions::Action::Candidates: {
@@ -266,6 +267,10 @@ void GlmTextService::applyActions(EditSession* session, const EngineActions& act
                 applyThemeTo(candidateWindow_, session);
             }
             candidateWindow_->clear();
+            if (act.list.empty()) {
+                candidateWindow_->hide();
+                break;
+            }
             const wchar_t* selKeys = L"123456789";
             int n = 0;
             for (auto& item : act.list) {
