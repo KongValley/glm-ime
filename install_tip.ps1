@@ -24,8 +24,12 @@ Copy-Item "$SRC\crates\engine-rs\lexicon.json" "$INSTDIR\" -Force
 $p = Start-Process "$env:SystemRoot\System32\regsvr32.exe" -ArgumentList "/s `"$INSTDIR\x64\$DLL`"" -Wait -PassThru
 if ($p.ExitCode -eq 0) { Log "OK regsvr32 $DLL" } else { Log "FAIL regsvr32 exit=$($p.ExitCode)"; exit 1 }
 
-New-Item -Path 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run' -Force | Out-Null
-Set-ItemProperty -Path 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'glm-launcher' -Value "$INSTDIR\glm-launcher.exe"
+# 用户级自启（HKCU）：规避部分安全软件对 HKLM Run 键的锁定，且无需管理员
+$runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
+Set-ItemProperty -Path $runKey -Name 'glm-launcher' -Value "$INSTDIR\glm-launcher.exe"
+# 清理可能残留的 HKLM 旧条目（失败不影响安装）
+Remove-ItemProperty -Path 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'glm-launcher' -ErrorAction SilentlyContinue
 
 Start-Process "$INSTDIR\glm-launcher.exe"
 Start-Sleep -Seconds 2
