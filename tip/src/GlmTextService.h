@@ -27,6 +27,18 @@ protected:
     void onKeyboardStatusChanged(bool opened) override;
 
 private:
+    struct Theme {
+        std::wstring font = L"Microsoft YaHei UI";
+        int fontSize = 20;
+        int candPerRow = 1;
+        COLORREF bg = RGB(24, 26, 32), text = RGB(232, 234, 240);
+        COLORREF selKey = RGB(120, 170, 255);
+        COLORREF selBg = RGB(46, 52, 64), selText = RGB(255, 255, 255);
+        COLORREF border = RGB(70, 74, 88);
+        bool loaded = false;
+    };
+    void loadTheme();
+    void applyThemeTo(Ime::CandidateWindow* win, Ime::EditSession* session);
     void applyActions(Ime::EditSession* session, const EngineActions& actions);
     void startCompositionInSession(Ime::EditSession* session);
     void endCompositionInSession(Ime::EditSession* session, const wchar_t* finalText, int len);
@@ -34,6 +46,7 @@ private:
     void clearState();
 
     Ime::CandidateWindow* candidateWindow_ = nullptr;
+    Theme theme_;
     bool composing_ = false;
     bool englishMode_ = false; // 中英切换（M2：Shift 切换，M3 移到引擎侧协议）
 };

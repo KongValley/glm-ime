@@ -197,24 +197,20 @@ void CandidateWindow::onPaint(WPARAM wp, LPARAM lp) {
     oldFont = (HFONT)SelectObject(hDC, font_);
 
     GetClientRect(hwnd_,&rc);
-    SetTextColor(hDC, GetSysColor(COLOR_WINDOWTEXT));
-    SetBkColor(hDC, GetSysColor(COLOR_WINDOW));
+    SetTextColor(hDC, textColor_);
+    SetBkColor(hDC, bgColor_);
 
     // paint window background and border
     // draw a flat black border in Windows 8 app immersive mode
     // draw a 3d border in desktop mode
-    if(isImmersive()) {
-        HPEN pen = ::CreatePen(PS_SOLID, 3, RGB(0, 0, 0));
-        HGDIOBJ oldPen = ::SelectObject(hDC, pen);
-        ::Rectangle(hDC, rc.left, rc.top, rc.right, rc.bottom);
-        ::SelectObject(hDC, oldPen);
-        ::DeleteObject(pen);
-    }
-    else {
-        // draw a 3d border in desktop mode
-        ::FillSolidRect(ps.hdc, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, GetSysColor(COLOR_WINDOW));
-        ::Draw3DBorder(hDC, &rc, GetSysColor(COLOR_3DFACE), 0);
-    }
+    // 主题背景 + 边框（glm-ime：颜色可配）
+    ::FillSolidRect(hDC, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, bgColor_);
+    HPEN pen = ::CreatePen(PS_SOLID, isImmersive() ? 3 : 1, borderColor_);
+    HGDIOBJ oldPen = ::SelectObject(hDC, pen);
+    ::Rectangle(hDC, rc.left, rc.top, rc.right, rc.bottom);
+    ::SelectObject(hDC, oldPen);
+    ::DeleteObject(pen);
+    ::SetBkMode(hDC, TRANSPARENT);
 
     // paint items
     int col = 0;
@@ -364,27 +360,22 @@ void CandidateWindow::paintItem(HDC hDC, int i,  int x, int y) {
     wchar_t selKey[] = L"?. ";
     selKey[0] = selKeys_[i];
     textRect.right = textRect.left + selKeyWidth_;
-    // FIXME: make the color of strings configurable.
-    COLORREF selKeyColor = RGB(0, 0, 255);
-    COLORREF oldColor = ::SetTextColor(hDC, selKeyColor);
+    bool selected = (useCursor_ && i == currentSel_);
+    // 选中项先铺高亮底色（glm-ime 主题：替代原反色 BitBlt）
+    if(selected)
+        ::FillSolidRect(hDC, x, y, selKeyWidth_ + textWidth_ + colSpacing_, itemHeight_, selBg_);
+    COLORREF oldColor = ::SetTextColor(hDC, selected ? selFg_ : selKeyColor_);
     // paint the selection key
-    ::ExtTextOut(hDC, textRect.left, textRect.top, ETO_OPAQUE, &textRect, selKey, 3, NULL);
+    ::ExtTextOut(hDC, textRect.left, textRect.top, 0, &textRect, selKey, 3, NULL);
     ::SetTextColor(hDC, oldColor); // restore text color
 
     // paint the candidate string
     wstring& item = items_.at(i);
     textRect.left += selKeyWidth_;
     textRect.right = textRect.left + textWidth_;
-    // paint the candidate string
-    ::ExtTextOut(hDC, textRect.left, textRect.top, ETO_OPAQUE, &textRect, item.c_str(), item.length(), NULL);
-
-    if(useCursor_ && i == currentSel_) { // invert the selected item
-        int left = textRect.left; // - selKeyWidth_;
-        int top = textRect.top;
-        int width = textRect.right - left;
-        int height = itemHeight_;
-        ::BitBlt(hDC, left, top, width, itemHeight_, hDC, left, top, NOTSRCCOPY);
-    }
+    ::SetTextColor(hDC, selected ? selFg_ : textColor_);
+    ::ExtTextOut(hDC, textRect.left, textRect.top, 0, &textRect, item.c_str(), item.length(), NULL);
+    ::SetTextColor(hDC, oldColor);
 }
 
 void CandidateWindow::itemRect(int i, RECT& rect) {

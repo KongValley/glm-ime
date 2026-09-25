@@ -39,6 +39,12 @@ public:
     }
 
     void setFont(HFONT f);
+    // 主题化（glm-ime vendored 修改）：颜色默认保持系统原值
+    void setTextColor(COLORREF c)   { if(textColor_!=c){textColor_=c; if(hwnd_) InvalidateRect(hwnd_, nullptr, TRUE);} }
+    void setSelKeyColor(COLORREF c) { if(selKeyColor_!=c){selKeyColor_=c; if(hwnd_) InvalidateRect(hwnd_, nullptr, TRUE);} }
+    void setSelectedColors(COLORREF bg, COLORREF fg) { if(selBg_!=bg||selFg_!=fg){selBg_=bg; selFg_=fg; if(hwnd_) InvalidateRect(hwnd_, nullptr, TRUE);} }
+    void setBackgroundColor(COLORREF c) { if(bgColor_!=c){bgColor_=c; if(hwnd_) InvalidateRect(hwnd_, nullptr, TRUE);} }
+    void setBorderColor(COLORREF c) { if(borderColor_!=c){borderColor_=c; if(hwnd_) InvalidateRect(hwnd_, nullptr, TRUE);} }
     virtual void recalculateSize();
 
 protected:
@@ -51,6 +57,8 @@ protected:
     POINTS oldPos;
     HFONT font_;
     int margin_;
+    // 主题色（构造函数给系统默认值）
+    COLORREF textColor_ = 0, selKeyColor_ = 0, selBg_ = 0, selFg_ = 0, bgColor_ = 0, borderColor_ = 0;
 };
 
 }

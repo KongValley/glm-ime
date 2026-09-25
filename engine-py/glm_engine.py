@@ -13,6 +13,8 @@ from pathlib import Path
 
 _HERE = Path(__file__).parent
 WORDS = []          # [(py_flat, text, freq)]，含用户词典
+FLATS = []          # 排序的 flat 数组（bisect 前缀索引）
+BY_FLAT = {}        # flat -> [(text, freq)] 按 freq 降序
 SYLLABLES = set()   # 音节表（整句切分用）
 USER_DICT_PATH = None
 LLM_CFG = {}
@@ -28,6 +30,7 @@ def load_lexicon(user_dir):
             src = p
     data = json.loads(src.read_text(encoding="utf-8"))
     words = [(w["py"], w["text"], int(w["freq"])) for w in data["words"]]
+    words.sort(key=lambda x: x[0])
     syllables = set(data.get("syllables", []))
     # 用户词典（同目录）：flat 匹配词形 {flat: [[text, freq], ...]}
     if user_dir:
@@ -40,22 +43,43 @@ def load_lexicon(user_dir):
                         words.append((flat, text, int(freq)))
             except Exception as e:
                 print(f"user dict load failed: {e}", file=sys.stderr)
+    rebuild_index(words)
     return words, syllables
 
 
+def rebuild_index(words):
+    """按 flat 排序 + 建索引数组/映射（learn 热合并后也调用）。"""
+    global FLATS, BY_FLAT
+    words.sort(key=lambda x: x[0])
+    FLATS = sorted({w[0] for w in words})
+    by_flat = {}
+    for py, text, freq in words:
+        by_flat.setdefault(py, []).append((text, freq))
+    for k in by_flat:
+        by_flat[k].sort(key=lambda x: -x[1])
+    BY_FLAT = by_flat
+
+
 def lookup(raw):
-    """精确(freq+10000) > 前缀(freq)，降序去重取前 9。规则见 proto。"""
+    """精确(freq+10000) > 前缀(freq)，降序去重取前 9。
+    词库按 flat 排序 + bisect 前缀区间（70k 词条下每键 <1ms）。"""
+    if not raw:
+        return []
     score = {}
-    for py, text, freq in WORDS:
-        flat = py.replace(" ", "")
-        if flat == raw:
-            s = freq + 10000
-        elif raw and flat.startswith(raw):
-            s = freq
-        else:
-            continue
-        if text not in score or score[text] < s:
-            score[text] = s
+    import bisect
+    i = bisect.bisect_left(FLATS, raw)
+    scanned = 0
+    for j in range(i, len(FLATS)):
+        flat = FLATS[j]
+        if not flat.startswith(raw):
+            break
+        scanned += 1
+        if scanned > 400:   # 前缀区间过大（如单字母）时限流
+            break
+        for text, freq in BY_FLAT[flat]:
+            s = freq + 10000 if flat == raw else freq
+            if text not in score or score[text] < s:
+                score[text] = s
     return sorted(score, key=lambda t: (-score[t], t))[:9]
 
 
@@ -234,6 +258,7 @@ def learn(code, text):
             USER_DICT_PATH.write_text(json.dumps(ud, ensure_ascii=False, indent=1), encoding="utf-8")
             # 热合并进当前词库（免重启）
             WORDS.append((code, text, 10000))
+            rebuild_index(WORDS)
     except Exception as e:
         print(f"learn failed: {e}", file=sys.stderr)
 

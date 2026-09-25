@@ -5,7 +5,11 @@
 // TF_ES_SYNC EditSession；在 OnKeyDown 的 EditSession 回调内调用= 嵌套同步
 // 会话 = TSF 静默失败（sessionResult 被忽略）。因此本类把这两段逻辑改为
 // 直接使用 onKeyDown 传入 session 的 editCookie（startCompositionInSession 等）。
+#include "json.hpp"
 #include "GlmTextService.h"
+
+// dllmain.cpp 定义（全局命名空间）
+extern HMODULE g_selfModule;
 #include "PipeClient.h"
 #include "ImeModule.h"
 #include "CandidateWindow.h"
@@ -170,6 +174,77 @@ void GlmTextService::endCompositionInSession(EditSession* session, const wchar_t
     }
 }
 
+// 主题：DLL 同目录 theme.json（可选）。缺省内置深色主题。
+// {"font":"Microsoft YaHei UI","fontSize":20,"candPerRow":1,
+//  "bg":[24,26,32],"text":[232,234,240],"selKey":[120,170,255],
+//  "selectedBg":[46,52,64],"selectedText":[255,255,255],"border":[70,74,88]}
+static std::wstring tipUtf8ToWide(const std::string& u) {
+    if (u.empty()) return {};
+    int n = ::MultiByteToWideChar(CP_UTF8, 0, u.data(), (int)u.size(), nullptr, 0);
+    std::wstring w(n, 0);
+    ::MultiByteToWideChar(CP_UTF8, 0, u.data(), (int)u.size(), w.data(), n);
+    return w;
+}
+
+static bool readThemeFile(const std::wstring& path, nlohmann::json& out) {
+    FILE* f = nullptr;
+    _wfopen_s(&f, path.c_str(), L"rb");
+    if (!f) return false;
+    std::string buf;
+    char tmp[4096];
+    size_t n = 0;
+    while ((n = fread(tmp, 1, sizeof(tmp), f)) > 0) buf.append(tmp, n);
+    fclose(f);
+    try { out = nlohmann::json::parse(buf); return out.is_object(); }
+    catch (...) { return false; }
+}
+
+static COLORREF rgbFromJson(const nlohmann::json& j, const char* key, COLORREF def) {
+    if (!j.contains(key)) return def;
+    auto& a = j[key];
+    if (!a.is_array() || a.size() < 3) return def;
+    return RGB(a[0].get<int>(), a[1].get<int>(), a[2].get<int>());
+}
+
+void GlmTextService::loadTheme() {
+    if (theme_.loaded) return;
+    wchar_t dllPath[MAX_PATH] = {};
+    ::GetModuleFileNameW(g_selfModule, dllPath, MAX_PATH);
+    std::wstring dir = dllPath;
+    size_t pos = dir.find_last_of(L'\\');
+    if (pos != std::wstring::npos) dir.resize(pos);
+    std::wstring path = dir + L"\\theme.json";
+    nlohmann::json j;
+    if (readThemeFile(path, j)) {
+        if (j.contains("font")) theme_.font = tipUtf8ToWide(j["font"].get<std::string>());
+        theme_.fontSize = j.value("fontSize", theme_.fontSize);
+        theme_.candPerRow = j.value("candPerRow", theme_.candPerRow);
+        theme_.bg = rgbFromJson(j, "bg", theme_.bg);
+        theme_.text = rgbFromJson(j, "text", theme_.text);
+        theme_.selKey = rgbFromJson(j, "selKey", theme_.selKey);
+        theme_.selBg = rgbFromJson(j, "selectedBg", theme_.selBg);
+        theme_.selText = rgbFromJson(j, "selectedText", theme_.selText);
+        theme_.border = rgbFromJson(j, "border", theme_.border);
+    }
+    theme_.loaded = true;
+}
+
+void GlmTextService::applyThemeTo(CandidateWindow* win, EditSession* session) {
+    loadTheme();
+    HFONT f = ::CreateFontW(
+        -theme_.fontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, theme_.font.c_str());
+    if (f) win->setFont(f);
+    win->setCandPerRow(theme_.candPerRow);
+    win->setTextColor(theme_.text);
+    win->setSelKeyColor(theme_.selKey);
+    win->setSelectedColors(theme_.selBg, theme_.selText);
+    win->setBackgroundColor(theme_.bg);
+    win->setBorderColor(theme_.border);
+    win->recalculateSize();
+}
+
 void GlmTextService::applyActions(EditSession* session, const EngineActions& actions) {
     for (auto& act : actions.actions) {
         switch (act.type) {
@@ -186,8 +261,10 @@ void GlmTextService::applyActions(EditSession* session, const EngineActions& act
             break;
         }
         case EngineActions::Action::Candidates: {
-            if (!candidateWindow_)
+            if (!candidateWindow_) {
                 candidateWindow_ = new CandidateWindow(this, session);
+                applyThemeTo(candidateWindow_, session);
+            }
             candidateWindow_->clear();
             const wchar_t* selKeys = L"123456789";
             int n = 0;

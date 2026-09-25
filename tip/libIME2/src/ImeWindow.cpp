@@ -31,6 +31,12 @@ ImeWindow::ImeWindow(TextService* service):
         margin_ = 5;
     }
 
+    textColor_ = GetSysColor(COLOR_WINDOWTEXT);
+    selKeyColor_ = RGB(0, 0, 255);
+    selBg_ = GetSysColor(COLOR_HIGHLIGHT);
+    selFg_ = GetSysColor(COLOR_HIGHLIGHTTEXT);
+    bgColor_ = GetSysColor(COLOR_WINDOW);
+    borderColor_ = GetSysColor(COLOR_3DFACE);
     font_ = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
 /*
     LOGFONT lf;
