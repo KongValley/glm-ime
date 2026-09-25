@@ -235,10 +235,20 @@ void CandidateWindow::onPaint(WPARAM wp, LPARAM lp) {
     // draw a flat black border in Windows 8 app immersive mode
     // draw a 3d border in desktop mode
     // 主题背景 + 边框（glm-ime：颜色可配）
-    ::FillSolidRect(hDC, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, bgColor_);
+    // 注：不用 FillSolidRect（ExtTextOut 技巧在窗口级填充不可靠，实测无效），
+    // 改 FillRect + 实心画刷（明确可靠）
+    {
+        HBRUSH bgBrush = ::CreateSolidBrush(bgColor_);
+        ::FillRect(hDC, &rc, bgBrush);
+        ::DeleteObject(bgBrush);
+    }
+    // 边框：Rectangle 会用【当前画刷】填充内部——必须选 NULL_BRUSH 只描边，
+    // 否则默认白刷把上面的背景填充整个涂白（历史 bug：候选窗背景恒白）
     HPEN pen = ::CreatePen(PS_SOLID, isImmersive() ? 3 : 1, borderColor_);
     HGDIOBJ oldPen = ::SelectObject(hDC, pen);
+    HGDIOBJ oldBrush = ::SelectObject(hDC, ::GetStockObject(NULL_BRUSH));
     ::Rectangle(hDC, rc.left, rc.top, rc.right, rc.bottom);
+    ::SelectObject(hDC, oldBrush);
     ::SelectObject(hDC, oldPen);
     ::DeleteObject(pen);
     ::SetBkMode(hDC, TRANSPARENT);
@@ -393,8 +403,12 @@ void CandidateWindow::paintItem(HDC hDC, int i,  int x, int y) {
     textRect.right = textRect.left + selKeyWidth_;
     bool selected = (useCursor_ && i == currentSel_);
     // 选中项先铺高亮底色（glm-ime 主题：替代原反色 BitBlt）
-    if(selected)
-        ::FillSolidRect(hDC, x, y, selKeyWidth_ + textWidth_ + colSpacing_, itemHeight_, selBg_);
+    if(selected) {
+        RECT selRect = { x, y, x + (LONG)(selKeyWidth_ + textWidth_ + colSpacing_), y + itemHeight_ };
+        HBRUSH selBrush = ::CreateSolidBrush(selBg_);
+        ::FillRect(hDC, &selRect, selBrush);
+        ::DeleteObject(selBrush);
+    }
     COLORREF oldColor = ::SetTextColor(hDC, selected ? selFg_ : selKeyColor_);
     // paint the selection key
     ::ExtTextOut(hDC, textRect.left, textRect.top, 0, &textRect, selKey, 3, NULL);

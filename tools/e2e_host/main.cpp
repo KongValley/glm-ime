@@ -73,19 +73,25 @@ static std::vector<ShotInfo> captureCandidateWindows(const std::string& prefix, 
         ::GetWindowRect(hwnd, &rc);
         int w = rc.right - rc.left, h = rc.bottom - rc.top;
         if (w <= 0 || h <= 0) return TRUE;
-        HDC src = ::GetDC(nullptr);          // 屏幕 DC：抓真实像素（PrintWindow 对自绘窗口不可靠）
-        HDC mem = ::CreateCompatibleDC(src);
-        HBITMAP bmp = ::CreateCompatibleBitmap(src, w, h);
+        // 路1：PrintWindow(PW_RENDERFULLCONTENT) —— 窗口自绘，不受位置/遮挡/DPI 影响
+        HDC scr = ::GetDC(nullptr);
+        HDC mem = ::CreateCompatibleDC(scr);
+        HBITMAP bmp = ::CreateCompatibleBitmap(scr, w, h);
         HGDIOBJ old = ::SelectObject(mem, bmp);
-        ::BitBlt(mem, 0, 0, w, h, src, rc.left, rc.top, SRCCOPY | CAPTUREBLT);
+        ::PrintWindow(hwnd, mem, 2 /*PW_RENDERFULLCONTENT*/);
         char file[MAX_PATH];
-        snprintf(file, MAX_PATH, "%s_%d_%d.bmp", c->prefix.c_str(), c->seq, (int)c->shots->size());
+        snprintf(file, MAX_PATH, "%s_%d_%d_pw.bmp", c->prefix.c_str(), c->seq, (int)c->shots->size());
+        if (saveBmp32(file, bmp, w, h))
+            c->shots->push_back({file, w, h});
+        // 路2：BitBlt 屏幕真实像素
+        ::BitBlt(mem, 0, 0, w, h, scr, rc.left, rc.top, SRCCOPY | CAPTUREBLT);
+        snprintf(file, MAX_PATH, "%s_%d_%d_bb.bmp", c->prefix.c_str(), c->seq, (int)c->shots->size());
         if (saveBmp32(file, bmp, w, h))
             c->shots->push_back({file, w, h});
         ::SelectObject(mem, old);
         ::DeleteObject(bmp);
         ::DeleteDC(mem);
-        ::ReleaseDC(nullptr, src);
+        ::ReleaseDC(nullptr, scr);
         return TRUE;
     }, (LPARAM)&ctx);
     return shots;
@@ -112,6 +118,7 @@ static void typeKey(WORD vk) {
     ::Sleep(45);
 }
 
+static std::string g_fullShotPrefix;   // 非空时每次 SHOT 旁路全屏截图
 static std::atomic<int> g_shotSeq{0};
 static std::vector<ShotInfo> g_shots;
 static std::string g_script;
@@ -208,6 +215,7 @@ static void leaveTestDesktop() {
 }
 
 static int runSuite(const std::string& suitePath, const std::string& outPath) {
+    ::SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     FILE* sf = nullptr;
     fopen_s(&sf, suitePath.c_str(), "rb");
     if (!sf) { printf("FAIL open suite\n"); return 1; }
@@ -292,6 +300,20 @@ static int runSuite(const std::string& suitePath, const std::string& outPath) {
                                 while (::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) { ::TranslateMessage(&msg); ::DispatchMessageW(&msg); }
                                 ::Sleep(50);
                             }
+                            if (!g_fullShotPrefix.empty()) {
+                                int sw = ::GetSystemMetrics(SM_CXSCREEN);
+                                int sh = ::GetSystemMetrics(SM_CYSCREEN);
+                                HDC src = ::GetDC(nullptr);
+                                HDC mem = ::CreateCompatibleDC(src);
+                                HBITMAP bmp = ::CreateCompatibleBitmap(src, sw, sh);
+                                HGDIOBJ old = ::SelectObject(mem, bmp);
+                                ::BitBlt(mem, 0, 0, sw, sh, src, 0, 0, SRCCOPY);
+                                char ff[MAX_PATH];
+                                snprintf(ff, MAX_PATH, "%s_full_%d.bmp", g_fullShotPrefix.c_str(), g_shotSeq.load());
+                                saveBmp32(ff, bmp, sw, sh);
+                                ::SelectObject(mem, old); ::DeleteObject(bmp); ::DeleteDC(mem);
+                                ::ReleaseDC(nullptr, src);
+                            }
                             auto s2 = captureCandidateWindows(g_shotPrefix, g_shotSeq++);
                             shots.insert(shots.end(), s2.begin(), s2.end());
                         }
@@ -338,6 +360,7 @@ static int runSuite(const std::string& suitePath, const std::string& outPath) {
 }
 
 int main(int argc, char** argv) {
+    ::SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     std::string outPath = "result.txt";
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -346,6 +369,7 @@ int main(int argc, char** argv) {
         else if (a == "--shot-prefix" && i + 1 < argc) g_shotPrefix = argv[++i];
         else if (a == "--post") g_usePost = true;
         else if (a == "--suite" && i + 1 < argc) g_suitePath = argv[++i];
+        else if (a == "--fullshot" && i + 1 < argc) g_fullShotPrefix = argv[++i];
     }
     if (!g_suitePath.empty())
         return runSuite(g_suitePath, outPath);

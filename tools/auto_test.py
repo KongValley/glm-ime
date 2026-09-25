@@ -24,6 +24,7 @@ CASES = [
     ("nomatch",     "zzzz<SP>",                             "zzzz"),
     ("sentence",    "zhongguo<SP>gongzuo<SP>",              "中国工作"),
     ("theme_dark",  "nihao<SHOT><SP>",                      "你好"),
+    ("theme_multi", "c<SHOT><ESC>",                         ""),
 ]
 
 def read_bmp(path):
@@ -86,7 +87,22 @@ if __name__ == "__main__":
             expect = next(e for n, k, e in CASES if n == name)
             ok = (text == expect)
             detail = f"text={text!r} expect={expect!r}"
-            if name == "theme_dark" and shots:
+            if name == "theme_multi" and shots:
+                # 关键断言：多候选窗的【非选中行】背景必须是主题深色
+                # （历史 bug：窗口背景填充从未生效，未选中项显示为白——单项用例掩盖了它）
+                f, dim = shots.split(",")[0].rsplit(":", 1)
+                w, h, px = read_bmp(f)
+                ys = range(int(h*0.55), max(int(h*0.55)+1, h-8))
+                inner = [p for y in ys for p in px[y][8:max(9, w-8)]]
+                dark = sum(1 for (r, g, b) in inner if (r+g+b)/3 < 90) / max(1, len(inner))
+                white = sum(1 for (r, g, b) in inner if r > 200 and g > 200 and b > 200) / max(1, len(inner))
+                detail += f" | shot {w}x{h} lowerRows dark%={dark:.0%} white%={white:.0%}"
+                if dark < 0.5:
+                    ok = False
+                    detail += " FAIL(window bg not themed)"
+                else:
+                    detail += " OK(bg themed)"
+            elif name == "theme_dark" and shots:
                 for s in shots.split(","):
                     f, dim = s.rsplit(":", 1)
                     w, h, wr, lum, dr = shot_stats(f)
