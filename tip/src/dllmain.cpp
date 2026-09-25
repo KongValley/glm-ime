@@ -8,6 +8,27 @@
 
 using namespace Ime;
 
+// 裸 Win32 日志（DllMain 装载锁内安全：无 STL/异常/内存分配的容错路径）
+static void dllBootLog(const char* msg) {
+    wchar_t dir[MAX_PATH] = {};
+    DWORD n = ::GetEnvironmentVariableW(L"LOCALAPPDATA", dir, MAX_PATH);
+    if (n == 0) return;
+    wcscat_s(dir, L"\\glm-ime\\logs");
+    ::CreateDirectoryW(dir, nullptr);
+    wchar_t parent[MAX_PATH] = {};
+    n = ::GetEnvironmentVariableW(L"LOCALAPPDATA", parent, MAX_PATH);
+    if (n) { wcscat_s(parent, L"\\glm-ime"); ::CreateDirectoryW(parent, nullptr); ::CreateDirectoryW(dir, nullptr); }
+    wchar_t path[MAX_PATH] = {};
+    swprintf_s(path, L"%s\\Boot-%lu.log", dir, (unsigned long)::GetCurrentProcessId());
+    HANDLE h = ::CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    DWORD written = 0;
+    ::WriteFile(h, msg, (DWORD)strlen(msg), &written, nullptr);
+    ::WriteFile(h, "\r\n", 2, &written, nullptr);
+    ::CloseHandle(h);
+}
+
 // {7E4A6B1D-93C2-4E57-9A51-3B8F2D6C0A44} —— glm-ime 独立 CLSID
 static const CLSID kTextServiceClsid =
     { 0x7e4a6b1d, 0x93c2, 0x4e57, { 0x9a, 0x51, 0x3b, 0x8f, 0x2d, 0x6c, 0x0a, 0x44 } };
@@ -45,10 +66,13 @@ private:
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
     switch (reason) {
     case DLL_PROCESS_ATTACH:
+        dllBootLog("ATTACH begin");
         g_selfModule = module;
         g_imeModule = new GlmImeModule(module);
+        dllBootLog("ATTACH done (module constructed)");
         break;
     case DLL_PROCESS_DETACH:
+        dllBootLog("DETACH");
         if (reserved == nullptr && g_imeModule) {
             g_imeModule->Release(); // 进程显式卸载时释放
             g_imeModule = nullptr;

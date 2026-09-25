@@ -4,6 +4,13 @@ project(glm-ime-tip CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# 静态 CRT（/MT）：TIP DLL 必须自包含 VC++ 运行库。
+# 教训（Snipaste 闪退根因）：TIP 以 /MD 编译时，若宿主 exe 同目录带旧版
+# msvcp140.dll（DLL 搜索顺序应用目录优先），TIP 会绑定到旧版 STL 导出，
+# VS2022 编译的代码在 14.29 运行库上二进制不兼容 -> 固定偏移 c0000005。
+# PIME 原版 CMake 同样强制 /MT（c_flag_overrides.cmake）。
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 # libIME2（vendored, LGPL-2.1, 动态链接）
 add_subdirectory(libIME2)
 

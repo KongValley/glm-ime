@@ -6,8 +6,24 @@
 #include <cstdio>
 
 static void tipLog(const char* fmt, ...) {
+    // 常开日志：%LOCALAPPDATA%\glm-ime\logs\TipLog-<pid>.log（每宿主进程独立）
+    static char cachedDir[MAX_PATH] = {0};
+    if (!cachedDir[0]) {
+        char* la = nullptr; size_t len = 0;
+        if (_dupenv_s(&la, &len, "LOCALAPPDATA") == 0 && la) {
+            snprintf(cachedDir, sizeof(cachedDir), "%s\\glm-ime", la);
+            free(la);
+        } else {
+            strcpy_s(cachedDir, "C:\\glm-logs");
+        }
+        ::CreateDirectoryA(cachedDir, nullptr);
+        char logs[MAX_PATH];
+        snprintf(logs, sizeof(logs), "%s\\logs", cachedDir);
+        ::CreateDirectoryA(logs, nullptr);
+        strcpy_s(cachedDir, logs);
+    }
     char path[MAX_PATH];
-    ::GetEnvironmentVariableA("GLM_TIP_LOG", path, MAX_PATH);
+    snprintf(path, sizeof(path), "%s\\TipLog-%lu.log", cachedDir, (unsigned long)::GetCurrentProcessId());
     FILE* f = nullptr;
     fopen_s(&f, path, "a");
     if (!f) return;

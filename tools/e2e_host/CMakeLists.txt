@@ -5,5 +5,3 @@ add_executable(e2e_host main.cpp)
 target_compile_options(e2e_host PRIVATE /utf-8)
 target_compile_definitions(e2e_host PRIVATE UNICODE _UNICODE)
 
-add_executable(alive _alive.cpp)
-target_compile_options(alive PRIVATE /utf-8)

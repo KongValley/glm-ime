@@ -16,9 +16,28 @@ static long glmSehFilter(unsigned long code) {
     return (code == 0xC0000005 || code == 0xC000041D || code == 0xC00000FD) ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH;
 }
 static void glmSehLog() {
+    // 常开日志：每宿主进程独立文件（%LOCALAPPDATA%\glm-ime\logs\TipLog-<pid>.log）
     char path[MAX_PATH];
-    ::GetEnvironmentVariableA("GLM_TIP_LOG", path, MAX_PATH);
-    if (!path[0]) return;
+    static char cached[MAX_PATH] = {0};
+    if (!cached[0]) {
+        char* la = nullptr; size_t len = 0;
+        if (_dupenv_s(&la, &len, "LOCALAPPDATA") == 0 && la) {
+            snprintf(cached, MAX_PATH, "%s\\glm-ime\\logs", la);
+            free(la);
+        } else {
+            strcpy_s(cached, "C:\\glm-logs");
+        }
+        ::CreateDirectoryA(cached, nullptr);
+        {
+            std::string parent = cached;
+            size_t pos = parent.find_last_of('\\');
+            if (pos != std::string::npos) {
+                parent.resize(pos);
+                ::CreateDirectoryA(parent.c_str(), nullptr);
+            }
+        }
+    }
+    snprintf(path, MAX_PATH, "%s\\TipLog-%lu.log", cached, (unsigned long)::GetCurrentProcessId());
     FILE* f = nullptr;
     fopen_s(&f, path, "a");
     if (!f) return;
@@ -34,8 +53,24 @@ static void glmSehLog() {
 #include <cstdarg>
 
 static void svcLog(const char* fmt, ...) {
+    // 常开日志：%LOCALAPPDATA%\glm-ime\logs\TipLog-<pid>.log（每宿主进程独立）
+    static char cachedDir[MAX_PATH] = {0};
+    if (!cachedDir[0]) {
+        char* la = nullptr; size_t len = 0;
+        if (_dupenv_s(&la, &len, "LOCALAPPDATA") == 0 && la) {
+            snprintf(cachedDir, sizeof(cachedDir), "%s\\glm-ime", la);
+            free(la);
+        } else {
+            strcpy_s(cachedDir, "C:\\glm-logs");
+        }
+        ::CreateDirectoryA(cachedDir, nullptr);
+        char logs[MAX_PATH];
+        snprintf(logs, sizeof(logs), "%s\\logs", cachedDir);
+        ::CreateDirectoryA(logs, nullptr);
+        strcpy_s(cachedDir, logs);
+    }
     char path[MAX_PATH];
-    ::GetEnvironmentVariableA("GLM_TIP_LOG", path, MAX_PATH);
+    snprintf(path, sizeof(path), "%s\\TipLog-%lu.log", cachedDir, (unsigned long)::GetCurrentProcessId());
     FILE* f = nullptr;
     fopen_s(&f, path, "a");
     if (!f) return;
@@ -51,6 +86,7 @@ using namespace Ime;
 namespace glm {
 
 GlmTextService::GlmTextService(ImeModule* module) : TextService(module) {
+    svcLog("[%p] GlmTextService constructed", (void*)this);
 }
 
 GlmTextService::~GlmTextService() {
@@ -91,10 +127,15 @@ void GlmTextService::onKeyboardStatusChanged(bool opened) {
 }
 
 void GlmTextService::onCompositionTerminated(bool forced) {
-    // TSF 强制终止组合（焦点切换等）：清壳内状态；composition_ 由 libIME 清理
+    // TSF 强制终止组合（焦点切换/文本被外部改写等）：清壳内状态；composition_ 由 libIME 清理
     composing_ = false;
     if (candidateWindow_)
         candidateWindow_->hide();
+    if (forced) {
+        // 外部终止时引擎会话可能与界面脱节（如宿主被外部改写文本）：
+        // 标记重连，下一次按键 init 重置引擎缓冲，避免残留串扰
+        engineInited_ = false;
+    }
 }
 
 bool GlmTextService::filterKeyDown(KeyEvent& keyEvent) {
@@ -262,6 +303,8 @@ void GlmTextService::loadTheme() {
         theme_.selText = rgbFromJson(j, "selectedText", theme_.selText);
         theme_.border = rgbFromJson(j, "border", theme_.border);
     }
+    svcLog("[%p] loadTheme done font=%ls bg=%06lX", (void*)this,
+           theme_.font.c_str(), (unsigned long)theme_.bg);
     theme_.loaded = true;
 }
 
@@ -272,6 +315,8 @@ void GlmTextService::applyThemeTo(CandidateWindow* win, EditSession* session) {
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, theme_.font.c_str());
     if (f) win->setFont(f);
+    svcLog("[%p] applyTheme font=%ls size=%d bg=%06lX hwnd=%p", (void*)this,
+           theme_.font.c_str(), theme_.fontSize, (unsigned long)theme_.bg, (void*)win->hwnd());
     win->setCandPerRow(theme_.candPerRow);
     win->setTextColor(theme_.text);
     win->setSelKeyColor(theme_.selKey);

@@ -75,6 +75,15 @@ docs/                决策记录
    管道必须显式 DACL（SDDL `D:(A;;GRGW;;;WD)`；手搓 SD 需 Owner+ACL 且易错）。
 8. 测试宿主必须泵消息：SendInput 的输入在无 GetMessage 循环的线程上永不分发。
 
+### 自动化验证（零人工）
+
+```bash
+python tools/auto_test.py     # 10 项断言：上屏正确性/数字选词/ESC/退格/词库/候选窗像素断言
+```
+- 单进程 suite 模式（`e2e_host --suite`）：一次前台获取跑全部用例
+- 候选窗**截图 + 像素级断言**（BitBlt 真实屏幕，内部区域采样判定主题）
+- 宿主进程独立黑匣子日志：`%LOCALAPPDATA%\glm-ime\logs\TipLog-<pid>.log`
+
 ### 运行布局
 
 ```

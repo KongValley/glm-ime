@@ -70,6 +70,20 @@ def main():
         flat = py.replace(" ", "")
         if not flat or len(flat) > MAX_FLAT_LEN or not flat.isascii():
             continue
+        # 过滤非汉字词条（CC-CEDICT 含大量字母/数字词条，如 "CP"）
+        if not simp or simp.isascii():
+            continue
+        # 过滤含生僻字的词条：只保留 GB2312 可编码汉字（6763 常用/次常用字）+ ASCII
+        def common_han(ch):
+            if ch.isascii():
+                return ch.isalnum()
+            try:
+                ch.encode("gb2312")
+                return True
+            except UnicodeEncodeError:
+                return False
+        if not all(common_han(ch) for ch in simp):
+            continue
         freq = 10000 - len(flat) * 500   # 启发式：短词优先
         slot = by_flat.setdefault(flat, {})
         slot[simp] = max(slot.get(simp, 0), freq)

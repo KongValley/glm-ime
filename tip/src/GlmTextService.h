@@ -50,6 +50,7 @@ private:
     Ime::CandidateWindow* candidateWindow_ = nullptr;
     Theme theme_;
     bool composing_ = false;
+    bool engineInited_ = false;
     bool englishMode_ = false; // 中英切换（M2：Shift 切换，M3 移到引擎侧协议）
 };
 
