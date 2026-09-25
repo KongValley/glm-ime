@@ -23,6 +23,8 @@ protected:
     void onDeactivate() override;
     bool filterKeyDown(Ime::KeyEvent& keyEvent) override;
     bool onKeyDown(Ime::KeyEvent& keyEvent, Ime::EditSession* session) override;
+    bool onKeyDownImpl(Ime::KeyEvent& keyEvent, Ime::EditSession* session);
+    bool filterKeyDownImpl(Ime::KeyEvent& keyEvent);
     void onCompositionTerminated(bool forced) override;
     void onKeyboardStatusChanged(bool opened) override;
 

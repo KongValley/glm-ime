@@ -10,6 +10,21 @@
 
 // dllmain.cpp 定义（全局命名空间）
 extern HMODULE g_selfModule;
+
+// SEH：异常码过滤（只拦访问违例类硬错误；正常 C++ 异常走 /EHa 之外的路径）
+static long glmSehFilter(unsigned long code) {
+    return (code == 0xC0000005 || code == 0xC000041D || code == 0xC00000FD) ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH;
+}
+static void glmSehLog() {
+    char path[MAX_PATH];
+    ::GetEnvironmentVariableA("GLM_TIP_LOG", path, MAX_PATH);
+    if (!path[0]) return;
+    FILE* f = nullptr;
+    fopen_s(&f, path, "a");
+    if (!f) return;
+    fprintf(f, "[SEH] caught exception in TIP, host protected\n");
+    fclose(f);
+}
 #include "PipeClient.h"
 #include "ImeModule.h"
 #include "CandidateWindow.h"
@@ -83,6 +98,16 @@ void GlmTextService::onCompositionTerminated(bool forced) {
 }
 
 bool GlmTextService::filterKeyDown(KeyEvent& keyEvent) {
+    __try {
+        return filterKeyDownImpl(keyEvent);
+    }
+    __except (glmSehFilter(GetExceptionCode())) {
+        glmSehLog();
+        return false;
+    }
+}
+
+bool GlmTextService::filterKeyDownImpl(KeyEvent& keyEvent) {
     // 英文模式全穿透；非组词时回车/退格/空格穿透（避免吃掉应用按键）
     if (englishMode_)
         return false;
@@ -95,6 +120,17 @@ bool GlmTextService::filterKeyDown(KeyEvent& keyEvent) {
 }
 
 bool GlmTextService::onKeyDown(KeyEvent& keyEvent, EditSession* session) {
+    __try {
+        return onKeyDownImpl(keyEvent, session);
+    }
+    __except (glmSehFilter(GetExceptionCode())) {
+        glmSehLog();
+        clearState();
+        return false; // 不吃键，宿主安全
+    }
+}
+
+bool GlmTextService::onKeyDownImpl(KeyEvent& keyEvent, EditSession* session) {
     UINT code = keyEvent.keyCode();
     // Shift 单独按 = 中英切换（M2 简化版；M3 移入引擎协议）
     if (code == VK_SHIFT) {

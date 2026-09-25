@@ -42,6 +42,10 @@ endif()
 target_sources(glm-ime-tip PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/tip_exports.def")
 target_link_libraries(glm-ime-tip PRIVATE libIME2_static)
 target_compile_options(glm-ime-tip PRIVATE /utf-8)
+    # SEH 防护需要 /EHa（替换 CMake 默认注入的 /EHsc）
+    foreach(flag_var CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_RELEASE CMAKE_CXX_FLAGS_DEBUG)
+        string(REPLACE "/EHsc" "/EHa" ${flag_var} "${${flag_var}}")
+    endforeach()
     target_link_options(glm-ime-tip PRIVATE "/MAP:${CMAKE_CURRENT_BINARY_DIR}/Release/glm-ime-tip.map" "/MAPINFO:EXPORTS")
 target_compile_definitions(glm-ime-tip PRIVATE
     _UNICODE UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
