@@ -1,0 +1,59 @@
+{
+  "cases": [
+    {
+      "name": "nihao+space -> 你好",
+      "keys": [["a",""],["a","n"],["a","i"],["a","h"],["a","a"],["a","o"]],
+      "keys_real": [["a","n"],["a","i"],["a","h"],["a","a"],["a","o"],[32,""]],
+      "expect_commit": "你好"
+    },
+    {
+      "name": "nih 前缀候选",
+      "keys_real": [["a","n"],["a","i"],["a","h"]],
+      "expect_last_candidates_contain": "你好"
+    },
+    {
+      "name": "nihao+2 -> 第二候选",
+      "keys_real": [["a","n"],["a","i"],["a","h"],["a","a"],["a","o"],[50,""]],
+      "expect_commit": "你豪"
+    },
+    {
+      "name": "vibe+enter 原样上屏",
+      "keys_real": [["a","v"],["a","i"],["a","b"],["a","e"],[13,""]],
+      "expect_commit": "vibe"
+    },
+    {
+      "name": "空缓冲 backspace 穿透",
+      "keys_real": [[8,""]],
+      "expect_consumed": false
+    },
+    {
+      "name": "esc 清空",
+      "keys_real": [["a","n"],["a","i"],[27,""]],
+      "expect_composition_cleared": true
+    },
+    {
+      "name": "shift 类穿透",
+      "keys_real": [[16,""]],
+      "expect_consumed": false
+    },
+    {
+      "name": "xihu 前缀多候选",
+      "keys_real": [["a","x"],["a","i"],["a","h"],["a","u"]],
+      "expect_last_candidates": ["喜欢"]
+    },
+    {
+      "name": "数字无候选穿透",
+      "keys_real": [[51,""]],
+      "expect_consumed": false
+    },
+    {
+      "name": "shurufa -> 输入法",
+      "keys_real": [["a","s"],["a","h"],["a","u"],["a","r"],["a","u"],["a","f"],["a","a"],[32,""]],
+      "expect_commit": "输入法"
+    }
+  ],
+  "bench": {
+    "rtt_iterations": 300,
+    "rtt_key": ["a","n"]
+  }
+}

@@ -1,0 +1,21 @@
+# build artifacts
+target/
+build/
+build-win32/
+**/target/
+**/build/
+**/__pycache__/
+*.pyc
+
+# vendored large repos (reference & lib, 可重新 clone)
+reference/
+
+# dist 产物
+dist/
+
+# 本机日志
+*.log
+
+# 用户私有配置（含 api_key）
+config.json
+user_lexicon.json
