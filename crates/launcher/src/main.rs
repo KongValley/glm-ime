@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+// 常驻后台程序：禁止控制台窗口（诊断走 %LOCALAPPDATA%\glm-ime\logs\launcher.log）
 //! glm-ime launcher —— 命名管道 ↔ 引擎 stdio 桥（M1，tokio 版）。
 //!
 //! 模型：每连接一个引擎进程（engine-rs 冷启动 4.4ms，进程即会话，天然隔离）。
@@ -5,6 +7,9 @@
 //! 协议：引擎侧见 proto/engine.v0.md；管道侧行协议与引擎 stdio 同构（一请求一行）。
 //! 诊断只走 stderr。
 
+use std::os::windows::io::AsRawHandle;
+use std::os::windows::process::CommandExt;
+use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -16,7 +21,7 @@ mod acl;
 
 const MAX_ENGINE_RESPAWNS: usize = 5;
 
-/// 追加式文件日志：%LOCALAPPDATA%\glm-ime\logs\launcher.log
+/// 追加式文件日志：%LOCALAPPDATA%\\glm-ime\\logs\\launcher.log
 fn llog(msg: &str) {
     let mut dir = match std::env::var("LOCALAPPDATA") {
         Ok(d) => d,
@@ -30,6 +35,9 @@ fn llog(msg: &str) {
         let _ = writeln!(f, "{msg}");
     }
 }
+
+/// 追加式文件日志：%LOCALAPPDATA%\glm-ime\logs\launcher.log
+
 
 struct EngineSlot {
     child: Child,
@@ -56,6 +64,7 @@ async fn spawn_engine(cmd: &[String]) -> std::io::Result<EngineSlot> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW：引擎不得弹控制台窗口
         .spawn()?;
     let stdin = child.stdin.take().expect("stdin piped");
     let stdout = child.stdout.take().expect("stdout piped");
@@ -82,6 +91,15 @@ async fn read_line_from<R: tokio::io::AsyncBufRead + Unpin>(rd: &mut R) -> Optio
 /// 重生收敛在 respawn() 单一入口：EOF 与 write-failed 两条触发路径最终都走它，
 /// 临界区内原子完成 kill→spawn→init 重放→吃 init 回复，避免双路径覆盖竞争。
 async fn serve_client(pipe: tokio::net::windows::named_pipe::NamedPipeServer, cmd: Arc<Vec<String>>) {
+    // 会话日志标识：客户端进程 pid（全事件日志，便于事后追溯）
+    let client_pid: u32 = unsafe {
+        let mut pid: u32 = 0;
+        let ok = GetNamedPipeClientProcessId(pipe.as_raw_handle() as _, &mut pid);
+        if ok != 0 { pid } else { 0 }
+    };
+    let session_t0 = std::time::Instant::now();
+    llog(&format!("session start client_pid={client_pid}"));
+    let mut req_count: u64 = 0;
     let (mut pipe_rd, mut pipe_wr) = tokio::io::split(pipe);
     let mut pipe_rd = tokio::io::BufReader::with_capacity(1 << 16, pipe_rd);
 
@@ -90,7 +108,6 @@ async fn serve_client(pipe: tokio::net::windows::named_pipe::NamedPipeServer, cm
         eprintln!("[launcher] handshake read failed/EOF");
         return;
     };
-    eprintln!("[launcher] handshake: {init_line}");
 
     let mut engine = match spawn_engine(&cmd).await {
         Ok(e) => e,
@@ -105,49 +122,95 @@ async fn serve_client(pipe: tokio::net::windows::named_pipe::NamedPipeServer, cm
     // 注意：初次握手【不吃】init 回复——select 的 stdout 分支会把它转发给客户端（行数守恒）。
     // 只有重生路径才需要吃掉重生 init 的回复（客户端视角多出的一行）。
 
+    // 未回请求队列（FIFO：引擎一请求一响应）。引擎崩溃/卡死时重放，客户端无感。
+    let mut pending: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    let engine_timeout = std::time::Duration::from_millis(2000);
+
+    // 重生引擎并重放未回请求。返回 false = 放弃会话。
+    async fn respawn_and_replay(
+        engine: &mut EngineSlot, cmd: &[String], init_line: &str,
+        pending: &std::collections::VecDeque<String>, respawns: &mut usize, reason: &str,
+    ) -> bool {
+        if *respawns >= MAX_ENGINE_RESPAWNS { return false; }
+        *respawns += 1;
+        eprintln!("[launcher] respawn #{} reason={reason} pending={}", *respawns, pending.len());
+        llog(&format!("respawn #{} reason={reason} pending={}", *respawns, pending.len()));
+        engine.child.kill().await.ok();
+        *engine = match spawn_engine(cmd).await { Ok(e) => e, Err(e) => { eprintln!("[launcher] respawn failed: {e}"); return false; } };
+        if send_line(&mut engine.stdin, init_line).await.is_err() { return false; }
+        let _ = read_line_from(&mut engine.stdout).await; // 吃 init 回复（行数守恒）
+        for line in pending {
+            if send_line(&mut engine.stdin, line).await.is_err() { return false; }
+        }
+        true
+    }
+
     let mut respawns = 0usize;
     loop {
         tokio::select! {
             line = read_line_from(&mut pipe_rd) => {
-                let Some(line) = line else { eprintln!("[launcher] pipe EOF"); break }; // 客户端断开
-                eprintln!("[launcher] recv<-client: {line}");
+                let Some(line) = line else { break }; // 客户端断开
                 // 竞态防护：引擎退出后其 stdin 管道缓冲仍接受写入（假成功），必须先查进程状态
                 let dead = matches!(engine.child.try_wait(), Ok(Some(_)));
                 if dead || send_line(&mut engine.stdin, &line).await.is_err() {
-                    eprintln!("[launcher] send failed/dead={} respawning ({respawns}) line={line}", dead);
-                    if respawns >= MAX_ENGINE_RESPAWNS { break; }
-                    respawns += 1;
-                    engine.child.kill().await.ok();
-                    engine = match spawn_engine(&cmd).await { Ok(e) => e, Err(e) => { eprintln!("[launcher] respawn spawn failed: {e}"); break } };
-                    if send_line(&mut engine.stdin, &init_line).await.is_err() { eprintln!("[launcher] respawn init send failed"); break; }
-                    let _ = read_line_from(&mut engine.stdout).await; // 吃掉重生 init 回复，行数守恒
+                    if !respawn_and_replay(&mut engine, &cmd, &init_line, &pending, &mut respawns, "pipe-write").await { break; }
                     if send_line(&mut engine.stdin, &line).await.is_err() { break; }
                 }
+                req_count += 1;
+                pending.push_back(line);
             }
-            out = read_line_from(&mut engine.stdout) => {
+            out = async {
+                if pending.is_empty() {
+                    // 空闲期：引擎本就不输出，不可施加超时（否则误判卡死反复重生）
+                    Ok(read_line_from(&mut engine.stdout).await)
+                } else {
+                    // 有待回请求：2s 无响应视为卡死
+                    match tokio::time::timeout(engine_timeout, read_line_from(&mut engine.stdout)).await {
+                        Ok(v) => Ok(v),
+                        Err(_) => { llog("engine response timeout (2s) pending>0"); Err(()) }
+                    }
+                }
+            } => {
+                let out: Option<String> = match out {
+                    Err(()) => {
+                        if !respawn_and_replay(&mut engine, &cmd, &init_line, &pending, &mut respawns, "timeout").await { break; }
+                        continue;
+                    }
+                    Ok(v) => v,
+                };
                 match out {
                     Some(out) => {
-                        eprintln!("[launcher] fwd->client: {out}");
+                        pending.pop_front();   // 一请求一响应：出队已回请求
                         if pipe_wr.write_all(out.as_bytes()).await.is_err()
-                            || pipe_wr.write_all(b"\n").await.is_err() { eprintln!("[launcher] pipe write failed"); break; }
+                            || pipe_wr.write_all(b"\n").await.is_err() { break; }
                         let _ = pipe_wr.flush().await;
                     }
                     None => {
-                        // 引擎 EOF：重生并重放 init（会话状态归零，见 docs/m1-design.md）
-                        if respawns >= MAX_ENGINE_RESPAWNS { break; }
-                        respawns += 1;
-                        eprintln!("[launcher] engine died, respawning ({respawns})");
-                        engine.child.kill().await.ok();
-                        engine = match spawn_engine(&cmd).await { Ok(e) => e, Err(e) => { eprintln!("[launcher] respawn spawn failed: {e}"); break } };
-                        if send_line(&mut engine.stdin, &init_line).await.is_err() { eprintln!("[launcher] respawn init send failed"); break; }
-                        let _ = read_line_from(&mut engine.stdout).await;
+                        if !respawn_and_replay(&mut engine, &cmd, &init_line, &pending, &mut respawns, "eof").await { break; }
                     }
                 }
             }
         }
     }
-    engine.child.kill().await.ok();
+    let killed = engine.child.kill().await.is_ok();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), engine.child.wait()).await; // 回收，防残留
+    llog(&format!(
+        "session end client_pid={client_pid} requests={req_count} respawns={respawns} kill={} dur={:?}",
+        if killed { "ok" } else { "already-exited" },
+        session_t0.elapsed()
+    ));
     eprintln!("[launcher] client disconnected (respawns={respawns})");
+}
+
+/// 启动时清理孤儿引擎进程（上次异常退出可能遗留；用户曾见任务栏一堆引擎窗口——防复发）。
+/// 单实例守护保证此刻无其它 launcher 运行，故所有同名引擎均为孤儿，安全清理。
+fn kill_orphan_engines() {
+    let _ = std::process::Command::new("taskkill")
+        .args(["/IM", "glm-engine-rs.exe", "/F"])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 fn single_instance() -> Option<HANDLE> {
@@ -176,6 +239,7 @@ fn username() -> String {
 
 #[tokio::main]
 async fn main() {
+    kill_orphan_engines(); // 防孤儿引擎堆积
     let Some(_mutex) = single_instance() else {
         eprintln!("[launcher] another instance already running");
         std::process::exit(1);

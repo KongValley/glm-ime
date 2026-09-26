@@ -135,25 +135,17 @@ static void clearModifiers() {
     }
 }
 
+// 温和前台获取（非侵入：最多 3 次尝试，失败即报告环境不可用，不纠缠用户前台）
+// 约束（docs/TECH.md §6.3）：禁止进程风暴/ALT 注入/任何影响其它窗口的操作
 static void grabForeground() {
-    for (int i = 0; i < 15 && ::GetForegroundWindow() != g_edit; ++i) {
-        // SendInput 单发 ALT 键对：真实输入事件使本进程获得前台权利（系统前台锁定策略）
-        INPUT alt[2] = {};
-        alt[0].type = INPUT_KEYBOARD; alt[0].ki.wVk = VK_MENU;
-        alt[1].type = INPUT_KEYBOARD; alt[1].ki.wVk = VK_MENU; alt[1].ki.dwFlags = KEYEVENTF_KEYUP;
-        ::SendInput(2, alt, sizeof(INPUT));
-        ::Sleep(80);
+    for (int i = 0; i < 3 && ::GetForegroundWindow() != g_edit; ++i) {
         DWORD fg = ::GetWindowThreadProcessId(::GetForegroundWindow(), nullptr);
         DWORD my = ::GetCurrentThreadId();
         if (fg) ::AttachThreadInput(my, fg, TRUE);
-        ::BringWindowToTop(g_edit);
-        ::ShowWindow(g_edit, SW_RESTORE);
         ::SetForegroundWindow(g_edit);
-        ::SetActiveWindow(g_edit);
         ::SetFocus(g_edit);
         if (fg) ::AttachThreadInput(my, fg, FALSE);
-        ::Sleep(200);
-        clearModifiers();   // 清除 ALT 残留，避免后续字符被当组合键
+        ::Sleep(400);
     }
 }
 
@@ -264,6 +256,13 @@ static int runSuite(const std::string& suitePath, const std::string& outPath) {
         wchar_t fgCls[128] = {}; HWND fgw = ::GetForegroundWindow();
         ::GetClassNameW(fgw, fgCls, 128);
         fprintf(rf, "FOCUS|%d|%ls\n", (int)focused, fgCls);
+        if (!focused) {
+            // 非侵入约定：前台被其它应用占用时不执行用例（避免污染用户输入），明确报告后退出
+            fprintf(rf, "ENV_UNAVAILABLE|foreground occupied by another app\n");
+            fclose(rf);
+            printf("ENV_UNAVAILABLE\n");
+            return 3;
+        }
     }
 
     for (auto& c : cases) {

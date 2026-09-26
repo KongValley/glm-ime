@@ -36,6 +36,9 @@ static void tipLog(const char* fmt, ...) {
 
 using json = nlohmann::json;
 
+// dllmain.cpp 定义（全局命名空间）：TIP 自身模块句柄
+extern HMODULE g_selfModule;
+
 namespace glm {
 
 static std::string Utf8FromWide(const std::wstring& w) {
@@ -76,6 +79,35 @@ void PipeClient::close() {
     }
 }
 
+// launcher 自愈：连接失败时尝试拉起（单实例 mutex 保证幂等；10s 冷却防风暴）
+static void tryStartLauncher() {
+    static DWORD lastSpawn = 0;
+    DWORD now = ::GetTickCount();
+    if (now - lastSpawn < 10000)
+        return;
+    lastSpawn = now;
+    wchar_t dllPath[MAX_PATH] = {};
+    if (!::GetModuleFileNameW(g_selfModule, dllPath, MAX_PATH))
+        return;
+    // <inst>\x64\glm-ime-tip.dll -> <inst>\glm-launcher.exe
+    std::wstring p = dllPath;
+    size_t pos = p.find_last_of(L'\\');
+    if (pos == std::wstring::npos) return;
+    p.resize(pos);                          // x64
+    pos = p.find_last_of(L'\\');
+    if (pos == std::wstring::npos) return;
+    p.resize(pos);                          // <inst>
+    p += L"\\glm-launcher.exe";
+    STARTUPINFOW si = {};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi = {};
+    if (::CreateProcessW(p.c_str(), nullptr, nullptr, nullptr, FALSE,
+                         0x00000008 /*DETACHED_PROCESS*/, nullptr, nullptr, &si, &pi)) {
+        ::CloseHandle(pi.hProcess);
+        ::CloseHandle(pi.hThread);
+    }
+}
+
 bool PipeClient::ensureConnected() {
     if (pipe_ != nullptr && pipe_ != INVALID_HANDLE_VALUE)
         return true;
@@ -89,13 +121,14 @@ bool PipeClient::ensureConnected() {
         tipLog("CreateFile failed err=%lu pipe=%ls", (unsigned long)err, pipeName_.c_str());
         // 管道实例忙（另一端暂未 Accept）：等 launcher 空出实例
         if (err == ERROR_PIPE_BUSY) {
-            if (!::WaitNamedPipeW(pipeName_.c_str(), 2000))
+            if (!::WaitNamedPipeW(pipeName_.c_str(), 200))
                 return false;
             h = ::CreateFileW(pipeName_.c_str(), GENERIC_READ | GENERIC_WRITE,
                               0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
             if (h == INVALID_HANDLE_VALUE)
                 return false;
         } else {
+            tryStartLauncher();   // 管道不存在/权限问题：尝试拉起 launcher 自愈
             return false;
         }
     }
@@ -128,17 +161,15 @@ static bool overlappedTransfer(HANDLE h, bool read, void* buf, DWORD size, DWORD
         return false;
     }
     ok = ::GetOverlappedResult(h, &ov, transferred, FALSE);
-    tipLog("ov done rw=%d got=%lu ok=%d", (int)read, (unsigned long)*transferred, (int)ok);
     ::CloseHandle(ov.hEvent);
     return ok != FALSE;
 }
 
 bool PipeClient::request(const std::string& jsonLine, std::string& reply) {
-    tipLog("req: %s", jsonLine.c_str());
     if (!ensureConnected()) { tipLog("connect failed"); return false; }
     std::string line = jsonLine + "\n";
     DWORD written = 0;
-    if (!overlappedTransfer(pipe_, false, line.data(), (DWORD)line.size(), &written, 5000) || written != line.size()) {
+    if (!overlappedTransfer(pipe_, false, line.data(), (DWORD)line.size(), &written, 4000) || written != line.size()) {
         tipLog("write failed");
         close();
         return false;
@@ -148,18 +179,16 @@ bool PipeClient::request(const std::string& jsonLine, std::string& reply) {
     char buf[4096];
     for (;;) {
         DWORD got = 0;
-        if (!overlappedTransfer(pipe_, true, buf, sizeof(buf), &got, 5000) || got == 0) {
+        if (!overlappedTransfer(pipe_, true, buf, sizeof(buf), &got, 4000) || got == 0) {
             tipLog("read failed");
             close();
             return false;
         }
         reply.append(buf, got);
-        tipLog("read chunk %lu bytes total=%zu", (unsigned long)got, reply.size());
         if (reply.find('\n') != std::string::npos)
             break;
     }
     reply.erase(reply.find('\n'));
-    tipLog("reply: %s", reply.c_str());
     return true;
 }
 

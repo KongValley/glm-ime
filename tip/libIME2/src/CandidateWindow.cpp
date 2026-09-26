@@ -185,38 +185,7 @@ LRESULT CandidateWindow::wndProc(UINT msg, WPARAM wp , LPARAM lp) {
     return 0;
 }
 
-// 探针：确认运行的 onPaint 版本（glm-ime 临时诊断，随构建验证后移除）
-static void paintProbe() {
-    char dir[MAX_PATH] = {};
-    DWORD n = ::GetEnvironmentVariableA("LOCALAPPDATA", dir, MAX_PATH);
-    if (!n) return;
-    char path[MAX_PATH];
-    snprintf(path, MAX_PATH, "%s\\glm-ime\\logs\\Paint-%lu.log", dir, (unsigned long)::GetCurrentProcessId());
-    FILE* f = nullptr;
-    fopen_s(&f, path, "a");
-    if (!f) return;
-    fprintf(f, "onPaint v2 called\n");
-    fclose(f);
-}
-
 void CandidateWindow::onPaint(WPARAM wp, LPARAM lp) {
-    paintProbe();
-    {
-        // 渲染诊断：实际背景色与窗口矩形
-        char dir[MAX_PATH] = {};
-        if (::GetEnvironmentVariableA("LOCALAPPDATA", dir, MAX_PATH)) {
-            char path[MAX_PATH];
-            snprintf(path, MAX_PATH, "%s\\glm-ime\\logs\\Paint-%lu.log", dir, (unsigned long)::GetCurrentProcessId());
-            FILE* f = nullptr; fopen_s(&f, path, "a");
-            if (f) {
-                RECT r{}; ::GetClientRect(hwnd_, &r);
-                fprintf(f, "  bg=%06lX text=%06lX rect=%ldx%ld items=%zu\n",
-                        (unsigned long)bgColor_, (unsigned long)textColor_,
-                        (long)(r.right - r.left), (long)(r.bottom - r.top), items_.size());
-                fclose(f);
-            }
-        }
-    }
     // TODO: check isImmersive_, and draw the window differently
     // in Windows 8 app immersive mode to follow windows 8 UX guidelines
     PAINTSTRUCT ps;

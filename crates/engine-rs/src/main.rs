@@ -2,6 +2,22 @@
 //! stdio JSON Lines；诊断只走 stderr。与 engine-py 语义逐字节一致。
 
 use serde_json::{json, Value};
+
+/// 引擎文件日志：%LOCALAPPDATA%\glm-ime\logs\Engine-<pid>.log
+/// （全事件日志：启动/init统计/panic/退出；按键热路径不写，保持零开销）
+fn elog(msg: &str) {
+    let mut dir = match std::env::var("LOCALAPPDATA") {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    dir.push_str("\\glm-ime\\logs");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = format!("{dir}\\Engine-{}.log", std::process::id());
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        use std::io::Write;
+        let _ = writeln!(f, "{msg}");
+    }
+}
 use std::collections::HashMap;
 use std::io::{BufRead, BufWriter, Write};
 use std::path::PathBuf;
@@ -219,6 +235,7 @@ fn handle(msg: Value, words: &std::sync::Arc<std::sync::Mutex<Vec<Word>>>, sessi
                 .unwrap_or_default();
             let mut w = words.lock().unwrap();
             *w = load_lexicon(user_dir, &exe_dir);
+            elog(&format!("init: words={} user_dir={:?}", w.len(), user_dir));
             if !user_dir.is_empty() {
                 session.user_dict_path = Some(std::path::Path::new(user_dir).join("user_lexicon.json"));
                 // 启动加载用户词典
@@ -259,6 +276,11 @@ fn handle(msg: Value, words: &std::sync::Arc<std::sync::Mutex<Vec<Word>>>, sessi
 }
 
 fn main() {
+    // 崩溃追溯：panic 全量落盘（含位置与消息）
+    std::panic::set_hook(Box::new(|info| {
+        elog(&format!("PANIC: {info}"));
+    }));
+    elog(&format!("engine start pid={} version={}", std::process::id(), env!("CARGO_PKG_VERSION")));
     let words: std::sync::Arc<std::sync::Mutex<Vec<Word>>> = std::sync::Arc::new(std::sync::Mutex::new(vec![]));
     let mut session = Session::new();
     let stdin = std::io::stdin();
@@ -275,15 +297,20 @@ fn main() {
         let reply = match serde_json::from_str::<Value>(&line) {
             Ok(msg) => match handle(msg, &words, &mut session) {
                 None => {
+                    elog("engine exit (shutdown)");
                     let _ = writeln!(out, r#"{{"ok":true}}"#);
                     let _ = out.flush();
                     std::process::exit(0);
                 }
                 Some(r) => r,
             },
-            Err(e) => json!({"ok":false,"error":e.to_string()}),
+            Err(e) => {
+                elog(&format!("bad request: {e}"));
+                json!({"ok":false,"error":e.to_string()})
+            }
         };
         let _ = writeln!(out, "{reply}");
         let _ = out.flush();
     }
+    elog("engine exit (stdin EOF)");
 }

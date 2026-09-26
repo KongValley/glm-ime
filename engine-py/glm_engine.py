@@ -8,7 +8,7 @@ M3 扩展语义（相对 engine.v0）：
              不支持整句的引擎（engine-rs）对 Tab 穿透 —— 协议容差声明。
   自学习     每次 commit 非 ASCII 文本时，把 (当前缓冲码 → 提交文本) 记入
              user_lexicon.json（freq 递增），下次启动合并加载。"""
-import sys, json, os
+import sys, json, os, logging, tempfile
 from pathlib import Path
 
 _HERE = Path(__file__).parent
@@ -272,6 +272,7 @@ def handle(msg):
         global WORDS, SYLLABLES, USER_DICT_PATH, LLM_CFG
         user_dir = msg.get("user_dir", "")
         WORDS, SYLLABLES = load_lexicon(user_dir)
+        logging.info("init: words=%d syllables=%d user_dir=%r", len(WORDS), len(SYLLABLES), user_dir)
         USER_DICT_PATH = Path(user_dir) / "user_lexicon.json" if user_dir else None
         import llm as _llm
         LLM_CFG = _llm.load_llm_config(user_dir)
@@ -299,7 +300,8 @@ def main():
                 sys.stdout.write(json.dumps({"ok": True}, ensure_ascii=False) + "\n")
                 sys.stdout.flush()
                 return 0
-        except Exception as e:  # 进程不崩：协议级错误回 ok:false
+        except Exception as e:  # 进程不崩：协议级错误回 ok:false（含完整 traceback 落盘）
+            logging.exception("engine error on line: %r", line[:200])
             print(f"engine error: {e!r}", file=sys.stderr)
             reply = {"ok": False, "error": str(e)}
         sys.stdout.write(json.dumps(reply, ensure_ascii=False) + "\n")

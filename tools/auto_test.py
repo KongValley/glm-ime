@@ -59,24 +59,28 @@ if __name__ == "__main__":
     suite = WORK / "suite.txt"
     suite.write_text("\n".join(f"{n}||{k}||{e}" for n, k, e in CASES), encoding="utf-8")
     out = WORK / "result.txt"
-    # 抢前台可能被系统拒绝（用户应用占据前台时）：整体重试
+    # 非侵入约定（docs/TECH.md §6.3）：前台被占用时不硬抢；单次重试后报告环境不可用
     focus_ok = False
-    for attempt in range(4):
+    for attempt in range(2):
         if out.exists(): out.unlink()
-        r = subprocess.run([str(HOST), "--suite", str(suite), "--out", str(out)],
-                           cwd=str(HOST.parent), timeout=300,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([str(HOST), "--suite", str(suite), "--out", str(out)],
+                       cwd=str(HOST.parent), timeout=300,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if out.exists():
-            head = out.read_text(encoding="utf-8", errors="replace").splitlines()
-            if head and head[0].startswith("FOCUS|"):
-                focus_ok = head[0].split("|")[1] == "1"
+            lines = out.read_text(encoding="utf-8", errors="replace").splitlines()
+            if lines and lines[0].startswith("FOCUS|"):
+                focus_ok = lines[0].split("|")[1] == "1"
                 if focus_ok: break
-        print(f"  (focus attempt {attempt+1} failed, retry in 3s)")
-        time.sleep(3)
+            if any(l.startswith("ENV_UNAVAILABLE") for l in lines):
+                if attempt == 0:
+                    print("  (环境忙，5 秒后重试一次…)")
+                    time.sleep(5)
+                    continue
+                print("\n环境不可用：前台窗口被其它应用占用（当前不适合自动化测试）。")
+                print("请在方便时（不操作键盘鼠标的窗口期）重新运行：python tools/auto_test.py")
+                sys.exit(3)
     if not out.exists():
         print("NO RESULT FILE"); sys.exit(2)
-    if not focus_ok:
-        print("WARN: focus never acquired; 测试期间请勿操作鼠标键盘")
 
     results = []
     focus = 1

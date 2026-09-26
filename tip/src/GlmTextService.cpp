@@ -86,7 +86,6 @@ using namespace Ime;
 namespace glm {
 
 GlmTextService::GlmTextService(ImeModule* module) : TextService(module) {
-    svcLog("[%p] GlmTextService constructed", (void*)this);
 }
 
 GlmTextService::~GlmTextService() {
@@ -111,6 +110,7 @@ void GlmTextService::onActivate() {
 }
 
 void GlmTextService::onDeactivate() {
+    svcLog("[%p] onDeactivate", (void*)this);
     clearState();
     TextService::onDeactivate();
 }
@@ -345,6 +345,7 @@ void GlmTextService::applyActions(EditSession* session, const EngineActions& act
         case EngineActions::Action::Candidates: {
             if (!candidateWindow_) {
                 candidateWindow_ = new CandidateWindow(this, session);
+                svcLog("[%p] candidate window created", (void*)this);
                 applyThemeTo(candidateWindow_, session);
             }
             candidateWindow_->clear();
