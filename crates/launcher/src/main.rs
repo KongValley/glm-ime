@@ -16,6 +16,21 @@ mod acl;
 
 const MAX_ENGINE_RESPAWNS: usize = 5;
 
+/// 追加式文件日志：%LOCALAPPDATA%\glm-ime\logs\launcher.log
+fn llog(msg: &str) {
+    let mut dir = match std::env::var("LOCALAPPDATA") {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    dir.push_str("\\glm-ime\\logs");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = format!("{dir}\\launcher.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        use std::io::Write;
+        let _ = writeln!(f, "{msg}");
+    }
+}
+
 struct EngineSlot {
     child: Child,
     stdin: ChildStdin,
@@ -187,7 +202,20 @@ async fn main() {
     };
     loop {
         if let Err(e) = server.connect().await {
-            eprintln!("[launcher] connect error: {e:?}");
+            // 关键修复：未连接的实例绝不交给会话（否则 read 永久阻塞、泄漏实例，
+            // 累积至 FIFO/PIPE 上限后所有新连接报 ERROR_PIPE_BUSY=231，launcher 假死）
+            eprintln!("[launcher] connect error: {e:?}; recreating instance");
+            llog(&format!("connect error: {e:?}; recreating"));
+            server = match unsafe { ServerOptions::new().create_with_security_attributes_raw(&pipe_name, sa_ptr) } {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("[launcher] recreate failed: {e:?}");
+                    llog(&format!("recreate failed: {e:?}"));
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    continue;
+                }
+            };
+            continue;
         }
         let client = server;
         let cmd = Arc::clone(&cmd);

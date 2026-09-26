@@ -25,6 +25,8 @@ CASES = [
     ("sentence",    "zhongguo<SP>gongzuo<SP>",              "中国工作"),
     ("theme_dark",  "nihao<SHOT><SP>",                      "你好"),
     ("theme_multi", "c<SHOT><ESC>",                         ""),
+    ("csssss_basic", "csssss<SP>",                          "csssss"),
+    ("csssss_stages", "c<SHOT>s<SHOT>ssss<SHOT><SP>",       "csssss"),
 ]
 
 def read_bmp(path):
@@ -87,7 +89,22 @@ if __name__ == "__main__":
             expect = next(e for n, k, e in CASES if n == name)
             ok = (text == expect)
             detail = f"text={text!r} expect={expect!r}"
-            if name == "theme_multi" and shots:
+            if name == "csssss_stages":
+                # 按 SHOT 序号判定：仅第 0 次 SHOT（'c'，有候选）应有可见候选窗；
+                # 第 1/2 次（'cs'/'csssss'，无候选）窗口必须已隐藏
+                import re as _re
+                seqs = set()
+                for x in shots.split(","):
+                    if not x: continue
+                    m = _re.search(r"_(\d+)_\d+_(?:pw|bb)\.bmp$", x.rsplit(":", 1)[0])
+                    if m: seqs.add(int(m.group(1)))
+                detail += f" | shots with visible window: {sorted(seqs)}"
+                if seqs != {0}:
+                    ok = False
+                    detail += " FAIL(candidate window must hide when candidates become empty)"
+                else:
+                    detail += " OK(window hides when no candidates)"
+            elif name == "theme_multi" and shots:
                 # 关键断言：多候选窗的【非选中行】背景必须是主题深色
                 # （历史 bug：窗口背景填充从未生效，未选中项显示为白——单项用例掩盖了它）
                 f, dim = shots.split(",")[0].rsplit(":", 1)

@@ -180,7 +180,7 @@ class Session:
         acts = []
         if self.raw:
             acts.append({"action": "composition", "text": self.raw, "cursor": len(self.raw)})
-        if self.cands:
+            # 组词中总是显式发送候选（含空列表）：空列表 = 关闭候选窗
             acts.append({"action": "candidates", "list": self.cands})
         return acts
 

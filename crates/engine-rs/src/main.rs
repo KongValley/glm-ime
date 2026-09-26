@@ -135,8 +135,8 @@ impl Session {
         let mut acts = vec![];
         if !self.raw.is_empty() {
             acts.push(json!({"action":"composition","text":self.raw,"cursor":self.raw.chars().count()}));
-        }
-        if !self.cands.is_empty() {
+            // 组词中总是显式发送候选（含空列表）：空列表 = 关闭候选窗。
+            // 若省略空候选，TIP 无法感知"候选消失"，候选窗将残留显示。
             acts.push(json!({"action":"candidates","list":self.cands}));
         }
         acts
