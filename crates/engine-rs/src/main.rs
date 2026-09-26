@@ -25,6 +25,7 @@ use std::path::PathBuf;
 #[derive(Clone)]
 struct Word {
     flat: String, // py 去空格
+    abbr: String, // 首字母缩写（简拼）
     text: String,
     freq: i64,
 }
@@ -59,6 +60,7 @@ fn load_lexicon(user_dir: &str, exe_dir: &std::path::Path) -> Vec<Word> {
         .iter()
         .map(|w| Word {
             flat: w["py"].as_str().unwrap_or("").replace(' ', ""),
+            abbr: w["ab"].as_str().unwrap_or("").to_string(),
             text: w["text"].as_str().unwrap_or("").to_string(),
             freq: w["freq"].as_i64().unwrap_or(0),
         })
@@ -66,6 +68,40 @@ fn load_lexicon(user_dir: &str, exe_dir: &std::path::Path) -> Vec<Word> {
 }
 
 fn lookup(words: &[Word], raw: &str) -> Vec<String> {
+    let out = lookup_exact(words, raw);
+    if !out.is_empty() {
+        return out;
+    }
+    // 简拼回退（B19）：全拼无果时按首字母缩写匹配（含前缀），如 "sd" -> 是的/速度
+    if raw.is_empty() || !raw.is_ascii() {
+        return out;
+    }
+    let mut score: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
+    for w in words {
+        let s = if w.abbr == raw {
+            w.freq + 10000
+        } else if w.abbr.starts_with(raw) {
+            w.freq - 500   // 简拼前缀略降权（低于精确/全拼）
+        } else {
+            continue;
+        };
+        score
+            .entry(w.text.as_str())
+            .and_modify(|old| {
+                if s > *old {
+                    *old = s;
+                }
+            })
+            .or_insert(s);
+    }
+    let mut v: Vec<(&str, i64)> = score.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    v.truncate(9);
+    v.into_iter().map(|(t, _)| t.to_string()).collect()
+}
+
+/// 全拼（精确+前缀）查询
+fn lookup_exact(words: &[Word], raw: &str) -> Vec<String> {
     let mut score: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
     for w in words {
         let s = if w.flat == raw {
@@ -112,7 +148,7 @@ impl Session {
         // 热合并：当前词库
         {
             let mut w = words_slot.lock().unwrap();
-            w.push(Word { flat: code.clone(), text: text.clone(), freq: 10000 });
+            w.push(Word { flat: code.clone(), abbr: code.clone(), text: text.clone(), freq: 10000 });
         }
         // 落盘
         if let Some(path) = &self.user_dict_path {
@@ -248,6 +284,7 @@ fn handle(msg: Value, words: &std::sync::Arc<std::sync::Mutex<Vec<Word>>>, sessi
                                     for e in arr {
                                         w.push(Word {
                                             flat: flat.clone(),
+                                            abbr: flat.clone(),
                                             text: e[0].as_str().unwrap_or("").to_string(),
                                             freq: e[1].as_i64().unwrap_or(1),
                                         });

@@ -105,6 +105,38 @@
       "expect_commit": "你好"
     },
     {
+      "name": "简拼 srf -> 输入法",
+      "keys_real": [
+        [
+          "a",
+          "s"
+        ],
+        [
+          "a",
+          "r"
+        ],
+        [
+          "a",
+          "f"
+        ]
+      ],
+      "expect_last_candidates_contain": "输入法"
+    },
+    {
+      "name": "简拼 cs -> 含测试",
+      "keys_real": [
+        [
+          "a",
+          "c"
+        ],
+        [
+          "a",
+          "s"
+        ]
+      ],
+      "expect_last_candidates_contain": "测试"
+    },
+    {
       "name": "nihao+2 越界穿透",
       "keys_real": [
         [

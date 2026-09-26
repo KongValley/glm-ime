@@ -15,6 +15,8 @@ _HERE = Path(__file__).parent
 WORDS = []          # [(py_flat, text, freq)]，含用户词典
 FLATS = []          # 排序的 flat 数组（bisect 前缀索引）
 BY_FLAT = {}        # flat -> [(text, freq)] 按 freq 降序
+ABBRS = []          # 排序的简拼缩写数组（bisect）
+BY_ABBR = {}        # abbr -> [(text, freq)]
 SYLLABLES = set()   # 音节表（整句切分用）
 USER_DICT_PATH = None
 LLM_CFG = {}
@@ -29,7 +31,7 @@ def load_lexicon(user_dir):
         if p.exists():
             src = p
     data = json.loads(src.read_text(encoding="utf-8"))
-    words = [(w["py"], w["text"], int(w["freq"])) for w in data["words"]]
+    words = [(w["py"], w.get("ab", w["py"]), w["text"], int(w["freq"])) for w in data["words"]]
     words.sort(key=lambda x: x[0])
     syllables = set(data.get("syllables", []))
     # 用户词典（同目录）：flat 匹配词形 {flat: [[text, freq], ...]}
@@ -40,7 +42,7 @@ def load_lexicon(user_dir):
                 ud = json.loads(up.read_text(encoding="utf-8"))
                 for flat, entries in ud.get("words", {}).items():
                     for text, freq in entries:
-                        words.append((flat, text, int(freq)))
+                        words.append((flat, flat, text, int(freq)))  # 用户词：abbr=输入码本身
             except Exception as e:
                 print(f"user dict load failed: {e}", file=sys.stderr)
     rebuild_index(words)
@@ -49,35 +51,54 @@ def load_lexicon(user_dir):
 
 def rebuild_index(words):
     """按 flat 排序 + 建索引数组/映射（learn 热合并后也调用）。"""
-    global FLATS, BY_FLAT
+    global FLATS, BY_FLAT, ABBRS, BY_ABBR
     words.sort(key=lambda x: x[0])
     FLATS = sorted({w[0] for w in words})
     by_flat = {}
-    for py, text, freq in words:
+    for py, ab, text, freq in words:
         by_flat.setdefault(py, []).append((text, freq))
     for k in by_flat:
         by_flat[k].sort(key=lambda x: -x[1])
     BY_FLAT = by_flat
+    # 简拼索引（B19）
+    ABBRS = sorted({w[1] for w in words})
+    by_ab = {}
+    for py, ab, text, freq in words:
+        by_ab.setdefault(ab, []).append((text, freq))
+    for k in by_ab:
+        by_ab[k].sort(key=lambda x: -x[1])
+    BY_ABBR = by_ab
 
 
 def lookup(raw):
-    """精确(freq+10000) > 前缀(freq)，降序去重取前 9。
-    词库按 flat 排序 + bisect 前缀区间（70k 词条下每键 <1ms）。"""
+    """三级：全拼精确(freq+10000) > 全拼前缀(freq) > 简拼回退（B19）。
+    全拼走 bisect 前缀区间；仅当全拼无果时对首字母缩写索引做同样匹配。"""
     if not raw:
         return []
+    import bisect
+    out = _lookup_index(FLATS, BY_FLAT, raw, 10000, 400)
+    if out:
+        return out
+    if not raw.isascii():
+        return out
+    # 简拼回退：sd -> 是的/速度 等
+    return _lookup_index(ABBRS, BY_ABBR, raw, 10000, 400)
+
+
+def _lookup_index(keys, table, raw, exact_bonus, limit):
     score = {}
     import bisect
-    i = bisect.bisect_left(FLATS, raw)
+    i = bisect.bisect_left(keys, raw)
     scanned = 0
-    for j in range(i, len(FLATS)):
-        flat = FLATS[j]
-        if not flat.startswith(raw):
+    for j in range(i, len(keys)):
+        k = keys[j]
+        if not k.startswith(raw):
             break
         scanned += 1
-        if scanned > 400:   # 前缀区间过大（如单字母）时限流
+        if scanned > limit:
             break
-        for text, freq in BY_FLAT[flat]:
-            s = freq + 10000 if flat == raw else freq
+        for text, freq in table[k]:
+            s = freq + exact_bonus if k == raw else freq
             if text not in score or score[text] < s:
                 score[text] = s
     return sorted(score, key=lambda t: (-score[t], t))[:9]
@@ -257,7 +278,7 @@ def learn(code, text):
             USER_DICT_PATH.parent.mkdir(parents=True, exist_ok=True)
             USER_DICT_PATH.write_text(json.dumps(ud, ensure_ascii=False, indent=1), encoding="utf-8")
             # 热合并进当前词库（免重启）
-            WORDS.append((code, text, 10000))
+            WORDS.append((code, code, text, 10000))
             rebuild_index(WORDS)
     except Exception as e:
         print(f"learn failed: {e}", file=sys.stderr)

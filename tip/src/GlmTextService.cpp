@@ -161,8 +161,13 @@ bool GlmTextService::filterKeyDownImpl(KeyEvent& keyEvent) {
 }
 
 bool GlmTextService::onKeyDown(KeyEvent& keyEvent, EditSession* session) {
+    DWORD t0 = ::GetTickCount();
     __try {
-        return onKeyDownImpl(keyEvent, session);
+        bool r = onKeyDownImpl(keyEvent, session);
+        DWORD dt = ::GetTickCount() - t0;
+        if (dt > 50)   // 完整按键路径耗时（含 TSF 操作）；热路径零开销：正常不写
+            svcLog("[%p] slow onKeyDown %lums code=%u", (void*)this, (unsigned long)dt, keyEvent.keyCode());
+        return r;
     }
     __except (glmSehFilter(GetExceptionCode())) {
         glmSehLog();

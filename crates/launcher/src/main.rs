@@ -123,13 +123,14 @@ async fn serve_client(pipe: tokio::net::windows::named_pipe::NamedPipeServer, cm
     // 只有重生路径才需要吃掉重生 init 的回复（客户端视角多出的一行）。
 
     // 未回请求队列（FIFO：引擎一请求一响应）。引擎崩溃/卡死时重放，客户端无感。
-    let mut pending: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    let mut pending: std::collections::VecDeque<(String, std::time::Instant)> = std::collections::VecDeque::new();
+    let mut max_latency_ms: u128 = 0;
     let engine_timeout = std::time::Duration::from_millis(2000);
 
     // 重生引擎并重放未回请求。返回 false = 放弃会话。
     async fn respawn_and_replay(
         engine: &mut EngineSlot, cmd: &[String], init_line: &str,
-        pending: &std::collections::VecDeque<String>, respawns: &mut usize, reason: &str,
+        pending: &std::collections::VecDeque<(String, std::time::Instant)>, respawns: &mut usize, reason: &str,
     ) -> bool {
         if *respawns >= MAX_ENGINE_RESPAWNS { return false; }
         *respawns += 1;
@@ -139,7 +140,7 @@ async fn serve_client(pipe: tokio::net::windows::named_pipe::NamedPipeServer, cm
         *engine = match spawn_engine(cmd).await { Ok(e) => e, Err(e) => { eprintln!("[launcher] respawn failed: {e}"); return false; } };
         if send_line(&mut engine.stdin, init_line).await.is_err() { return false; }
         let _ = read_line_from(&mut engine.stdout).await; // 吃 init 回复（行数守恒）
-        for line in pending {
+        for (line, _t) in pending {
             if send_line(&mut engine.stdin, line).await.is_err() { return false; }
         }
         true
@@ -157,7 +158,7 @@ async fn serve_client(pipe: tokio::net::windows::named_pipe::NamedPipeServer, cm
                     if send_line(&mut engine.stdin, &line).await.is_err() { break; }
                 }
                 req_count += 1;
-                pending.push_back(line);
+                pending.push_back((line, std::time::Instant::now()));
             }
             out = async {
                 if pending.is_empty() {
@@ -180,7 +181,13 @@ async fn serve_client(pipe: tokio::net::windows::named_pipe::NamedPipeServer, cm
                 };
                 match out {
                     Some(out) => {
-                        pending.pop_front();   // 一请求一响应：出队已回请求
+                        if let Some((_req, t)) = pending.pop_front() {   // 一请求一响应：出队已回请求
+                            let ms = t.elapsed().as_millis();
+                            if ms > max_latency_ms { max_latency_ms = ms; }
+                            if ms > 50 {   // 慢请求告警（热路径零开销：正常不写）
+                                llog(&format!("slow request {ms}ms client_pid={client_pid}"));
+                            }
+                        }
                         if pipe_wr.write_all(out.as_bytes()).await.is_err()
                             || pipe_wr.write_all(b"\n").await.is_err() { break; }
                         let _ = pipe_wr.flush().await;
@@ -195,7 +202,7 @@ async fn serve_client(pipe: tokio::net::windows::named_pipe::NamedPipeServer, cm
     let killed = engine.child.kill().await.is_ok();
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), engine.child.wait()).await; // 回收，防残留
     llog(&format!(
-        "session end client_pid={client_pid} requests={req_count} respawns={respawns} kill={} dur={:?}",
+        "session end client_pid={client_pid} requests={req_count} respawns={respawns} kill={} dur={:?} max_latency={max_latency_ms}ms",
         if killed { "ok" } else { "already-exited" },
         session_t0.elapsed()
     ));

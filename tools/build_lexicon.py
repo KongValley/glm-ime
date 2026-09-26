@@ -93,10 +93,27 @@ def main():
         slot = by_flat.setdefault(flat, {})
         slot[t] = max(slot.get(t, 0), f)
 
+    # 首字母缩写：syllables 贪心最长匹配切分后取各音节首字母（支持简拼输入）
+    syl_by_len = sorted(syllables, key=len, reverse=True)
+    def abbr_of(flat):
+        out = []
+        i = 0
+        while i < len(flat):
+            for syl in syl_by_len:
+                if flat.startswith(syl, i):
+                    out.append(syl[0])
+                    i += len(syl)
+                    break
+            else:
+                out.append(flat[i])   # 无法切分（非拼音串）：原样取字符
+                i += 1
+        return "".join(out)
+
     words = []
     for flat, texts in by_flat.items():
+        ab = abbr_of(flat)
         for t, f in sorted(texts.items(), key=lambda x: (-x[1], x[0]))[:TOP_PER_FLAT]:
-            words.append({"py": flat, "text": t, "freq": f})
+            words.append({"py": flat, "ab": ab, "text": t, "freq": f})
     words.sort(key=lambda w: (w["py"], -w["freq"], w["text"]))
 
     out = {

@@ -166,6 +166,7 @@ static bool overlappedTransfer(HANDLE h, bool read, void* buf, DWORD size, DWORD
 }
 
 bool PipeClient::request(const std::string& jsonLine, std::string& reply) {
+    DWORD t0 = ::GetTickCount();
     if (!ensureConnected()) { tipLog("connect failed"); return false; }
     std::string line = jsonLine + "\n";
     DWORD written = 0;
@@ -189,6 +190,11 @@ bool PipeClient::request(const std::string& jsonLine, std::string& reply) {
             break;
     }
     reply.erase(reply.find('\n'));
+    {
+        DWORD dt = ::GetTickCount() - t0;
+        if (dt > 50)   // 慢请求告警（热路径零开销：正常不写）
+            tipLog("slow request %lums: %.80s", (unsigned long)dt, jsonLine.c_str());
+    }
     return true;
 }
 
